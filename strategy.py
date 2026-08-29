@@ -51,7 +51,7 @@ def chop_filter_pass(df) -> bool:
     last = df.iloc[-1]
     is_alternating = ind.candle_color_alternation(df, lookback=6)
     vwap_distance_pct = abs(last["close"] - last["vwap"]) / last["vwap"] * 100
-    has_vwap_distance = vwap_distance_pct > 0.003  # ~ a few dollars on gold
+    has_vwap_distance = vwap_distance_pct > 0.3  # ~ a few dollars on gold
     has_ema_separation = last["ema_sep_pct"] > 0.02
 
     return (not is_alternating) and has_vwap_distance and has_ema_separation

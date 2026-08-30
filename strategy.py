@@ -1,14 +1,14 @@
 """
 Strategy engine built on Dany's rule-based framework:
- - EMA9/21 crossover for directional bias
- - VWAP + deviation bands for mean-reversion / trend context
- - RSI7 for momentum (never used alone for counter-trend entries)
- - ATR for volatility filtering and SL/TP placement
- - Chop Filter: candle alternation + VWAP distance + EMA separation
- - Rejection Confirmation Rule: wick >=2x body, close in outer third,
-   next candle breaks the level
- - M5 = entry timeframe, M15 = trend/confluence filter
- - Only fires a signal when ALL gates pass (no partial-credit scoring)
+  - EMA9/21 crossover for directional bias
+  - VWAP + deviation bands for mean-reversion / trend context
+  - RSI7 for momentum (never used alone for counter-trend entries)
+  - ATR for volatility filtering and SL/TP placement
+  - Chop Filter: candle alternation + VWAP distance + EMA separation
+  - Rejection Confirmation Rule: wick >=2x body, close in outer third,
+    next candle breaks the level
+  - M5 = entry timeframe, M15 = trend/confluence filter
+  - Weighted scoring: fires when at least 4 of 5 gates pass
 """
 import indicators as ind
 
@@ -68,9 +68,9 @@ def atr_volatility_ok(df, lookback: int = 20) -> bool:
 def rejection_confirmation(df, direction: str) -> bool:
     """
     direction: 'buy' looks for bullish rejection (long lower wick, close upper third,
-               next candle breaks the low).
+                next candle breaks the low).
     direction: 'sell' looks for bearish rejection (long upper wick, close lower third,
-               next candle breaks the high).
+                next candle breaks the high).
     Requires at least 2 candles after the rejection candle to confirm the break.
     """
     if len(df) < 3:
@@ -84,8 +84,6 @@ def rejection_confirmation(df, direction: str) -> bool:
         return False
 
     if direction == "buy":
-        # rejection off the low (long lower wick) -> confirmation is price
-        # continuing UP, i.e. next candle breaks ABOVE the rejection high
         lower_wick = min(candle["open"], candle["close"]) - candle["low"]
         close_position = (candle["close"] - candle["low"]) / full_range
         wick_ok = body > 0 and lower_wick >= 2 * body
@@ -94,8 +92,6 @@ def rejection_confirmation(df, direction: str) -> bool:
         return wick_ok and close_ok and break_ok
 
     if direction == "sell":
-        # rejection off the high (long upper wick) -> confirmation is price
-        # continuing DOWN, i.e. next candle breaks BELOW the rejection low
         upper_wick = candle["high"] - max(candle["open"], candle["close"])
         close_position = (candle["high"] - candle["close"]) / full_range
         wick_ok = body > 0 and upper_wick >= 2 * body
@@ -122,8 +118,8 @@ def evaluate_signal(m5_df, m15_df):
     by M15 (trend). Returns a dict describing the outcome — either a
     high-probability trade signal or a structured 'no trade' reason.
 
-    No daily trade cap: fires on every setup that clears all confluence
-    gates, however many that is in a session.
+    Weighted scoring: fires a signal when at least 4 of the 5 gates pass,
+    instead of requiring all 5.
     """
     m5 = build_frame(m5_df)
     m15 = build_frame(m15_df)
@@ -142,15 +138,16 @@ def evaluate_signal(m5_df, m15_df):
         "rsi_agrees": rsi_agrees(m5, direction),
     }
 
-    if not all(gates.values()):
+    score = sum(1 for v in gates.values() if v)
+    MIN_SCORE = 4
+    if score < MIN_SCORE:
         failed = [k for k, v in gates.items() if not v]
-        return {"signal": "NO_TRADE", "reason": f"Gates not met: {', '.join(failed)}", "gates": gates}
+        return {"signal": "NO_TRADE", "reason": f"Score {score}/5, failed: {', '.join(failed)}"}
 
     last = m5.iloc[-1]
     entry = last["close"]
     atr_val = last["atr14"]
 
-    # SL beyond the rejection candle's extreme, cushioned by 0.25x ATR
     rejection_candle = m5.iloc[-2]
     if direction == "buy":
         sl = rejection_candle["low"] - 0.25 * atr_val
@@ -176,7 +173,7 @@ def evaluate_signal(m5_df, m15_df):
         "rr": round(rr, 2),
         "rsi7": round(last["rsi7"], 1),
         "atr": round(atr_val, 2),
-        179:  "m15_trend": m15_trend,
-180:  "gates": gates,
-181:  "score": f"{score}/5",
-182:  }
+        "m15_trend": m15_trend,
+        "gates": gates,
+        "score": f"{score}/5",
+    }

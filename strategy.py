@@ -176,6 +176,7 @@ def evaluate_signal(m5_df, m15_df):
         "rr": round(rr, 2),
         "rsi7": round(last["rsi7"], 1),
         "atr": round(atr_val, 2),
-        "m15_trend": m15_trend,
-        "gates": gates,
-    }
+        179:  "m15_trend": m15_trend,
+180:  "gates": gates,
+181:  "score": f"{score}/5",
+182:  }

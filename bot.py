@@ -124,4 +124,4 @@ def poll_loop():
         try:
             if CHAT_ID:
                 result = get_current_signal()
-                print(f"[POLL] {result.get('signal')} | {result.get('reason', result.get('gat
+                print("[POLL]", result.get("signal"), "|", result.get("reason", result.get("gates")), flush=True)

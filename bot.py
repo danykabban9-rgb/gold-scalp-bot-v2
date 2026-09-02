@@ -10,8 +10,8 @@ Env vars required (set these on Render):
   TELEGRAM_TOKEN   - bot token from BotFather for @dany13goldbot
   TWELVE_DATA_KEY  - Twelve Data API key
   CHAT_ID          - your personal Telegram chat id, for auto-alerts
-                      (get it by messaging the bot once, then hitting
-                      https://api.telegram.org/bot<TOKEN>/getUpdates)
+                       (get it by messaging the bot once, then hitting
+                       https://api.telegram.org/bot<TOKEN>/getUpdates)
 """
 import os
 import threading
@@ -31,7 +31,6 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 POLL_SECONDS = 5 * 60  # check once per M5 candle close
-
 
 # ---------------------------------------------------------------------------
 # Telegram helpers
@@ -94,7 +93,7 @@ def telegram_webhook():
             return "ok"
 
         if text == "/start":
-            send_message(chat_id, "Danytraderlebanon gold scalping bot online. Send /signal for the current XAUUSD read.")
+            send_message(chat_id, "Danytraderlebanon gold scalping bot online. Send /signal")
         elif text == "/signal":
             try:
                 result = get_current_signal()
@@ -125,29 +124,4 @@ def poll_loop():
         try:
             if CHAT_ID:
                 result = get_current_signal()
-                if result["signal"] in ("BUY", "SELL"):
-                    # avoid re-sending the identical signal every poll cycle
-                    key = (result["signal"], result["entry"])
-                    if key != last_signal_key:
-                        send_message(CHAT_ID, format_signal_message(result))
-                        last_signal_key = key
-                else:
-                    last_signal_key = None
-        except Exception:
-            traceback.print_exc()
-        time.sleep(POLL_SECONDS)
-
-
-# Start the background poller at import time (not inside __main__) so it
-# also runs under gunicorn in production, since gunicorn imports this module
-# and calls `app` directly without executing the __main__ block.
-# IMPORTANT: run gunicorn with exactly 1 worker (see Procfile) — multiple
-# workers would each start their own poller and send duplicate alerts.
-if CHAT_ID and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
-    # the WERKZEUG_RUN_MAIN check avoids starting it twice under Flask's
-    # local debug reloader; gunicorn doesn't set this var so it's unaffected
-    threading.Thread(target=poll_loop, daemon=True).start()
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+                print(f"[POLL] {result.get('signal')} | {result.get('reason', result.get('gat

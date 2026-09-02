@@ -125,3 +125,21 @@ def poll_loop():
             if CHAT_ID:
                 result = get_current_signal()
                 print("[POLL]", result.get("signal"), "|", result.get("reason", result.get("gates")), flush=True)
+                if result["signal"] in ("BUY", "SELL"):
+                    key = (result["signal"], result["entry"])
+                    if key != last_signal_key:
+                        send_message(CHAT_ID, format_signal_message(result))
+                        last_signal_key = key
+                else:
+                    last_signal_key = None
+        except Exception:
+            traceback.print_exc()
+        time.sleep(POLL_SECONDS)
+
+
+if CHAT_ID and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+    threading.Thread(target=poll_loop, daemon=True).start()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)

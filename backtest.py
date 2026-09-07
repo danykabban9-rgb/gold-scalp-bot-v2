@@ -105,9 +105,9 @@ def score_trades(trades: list) -> dict:
 
 
 def grid_search(df: pd.DataFrame) -> dict:
-    adx_options = [18, 22, 26]
-    trend_thresh_options = [0.55, 0.65, 0.75]
-    range_thresh_options = [0.55, 0.65, 0.75]
+    adx_options = [20, 25]
+    trend_thresh_options = [0.6, 0.7]
+    range_thresh_options = [0.6, 0.7]
 
     best = None
     best_stats = None

@@ -22,9 +22,10 @@ import time
 import requests
 from flask import Flask, request, jsonify
 
-from data_feed import get_latest
+from data_feed import get_latest, get_history
 from indicators import compute_all_indicators
 from strategy import generate_signal, add_obv_slope, DEFAULT_PARAMS
+from backtest import run_backtest
 
 app = Flask(__name__)
 
@@ -163,6 +164,25 @@ def scan():
     send_telegram(format_signal_message(sig, candle_time))
     save_last_alert_time(candle_time)
     return jsonify({"status": "alert_sent", "side": sig.side})
+
+
+@app.route("/run_backtest", methods=["GET"])
+def run_backtest_endpoint():
+    """
+    One-off admin endpoint (free-tier substitute for Render Shell): pulls all
+    available M15 history from Twelve Data and runs the backtest grid search,
+    returning the best params + stats as JSON. Visit this URL once in a
+    browser, then copy the 'params' block into best_params.json in the repo
+    so it survives free-tier restarts (the live filesystem is wiped on spin-down).
+    """
+    try:
+        df = get_history(SYMBOL, "15min", TWELVE_DATA_KEY, refresh=True)
+        if len(df) < 250:
+            return jsonify({"error": f"Only {len(df)} candles available, need at least 250"}), 400
+        result = run_backtest(df)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/telegram", methods=["POST"])

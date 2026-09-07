@@ -1,179 +1,139 @@
 """
-Strategy engine built on Dany's rule-based framework:
-  - EMA9/21 crossover for directional bias
-  - VWAP + deviation bands for mean-reversion / trend context
-  - RSI7 for momentum (never used alone for counter-trend entries)
-  - ATR for volatility filtering and SL/TP placement
-  - Chop Filter: candle alternation + VWAP distance + EMA separation
-  - Rejection Confirmation Rule: wick >=2x body, close in outer third,
-    next candle breaks the level
-  - M5 = entry timeframe, M15 = trend/confluence filter
-  - Weighted scoring: fires when at least 4 of 5 gates pass
+strategy.py
+Regime-aware, multi-indicator scoring engine.
+
+Regime detection: ADX14 + EMA separation decide if the market is trending or ranging.
+- Trending regime -> trend-following score (EMA stack, MACD, Supertrend, PSAR, ADX, structure)
+- Ranging regime  -> mean-reversion score (Bollinger/VWAP deviation, RSI, Stoch, Williams %R, CCI, rejection candle)
+
+Every indicator "votes" BUY / SELL / neutral. A signal only fires when the
+vote count clears score_threshold out of the indicators active for that regime
+-- this is what backtest.py tunes, so the threshold isn't just guessed.
+
+Entry/SL/TP are ATR-based so they scale with current volatility, with a
+minimum 1:2 risk/reward enforced (matches the user's own trading rule).
 """
-import indicators as ind
 
-MIN_RR = 2.0  # minimum reward:risk enforced on every signal
+from dataclasses import dataclass, field
+from typing import Literal
 
+Side = Literal["BUY", "SELL", "NO_TRADE"]
 
-def build_frame(df):
-    """Attach all indicators to a raw OHLCV dataframe. Returns the same df enriched."""
-    df = df.copy()
-    df["ema9"] = ind.ema(df["close"], 9)
-    df["ema21"] = ind.ema(df["close"], 21)
-    df["rsi7"] = ind.rsi(df["close"], 7)
-    df["atr14"] = ind.atr(df, 14)
-    vwap_df = ind.vwap_with_bands(df, num_std=1.0)
-    df["vwap"] = vwap_df["vwap"]
-    df["vwap_upper"] = vwap_df["upper"]
-    df["vwap_lower"] = vwap_df["lower"]
-    df["ema_sep_pct"] = ind.ema_separation_pct(df["ema9"], df["ema21"])
-    return df
+DEFAULT_PARAMS = {
+    "adx_trend_threshold": 22,      # ADX above this = trending regime
+    "score_threshold_trend": 0.6,   # fraction of trend-votes needed to fire
+    "score_threshold_range": 0.6,   # fraction of range-votes needed to fire
+    "atr_sl_mult": 1.5,
+    "atr_tp1_mult": 3.0,            # 1:2 RR minimum
+    "atr_tp2_mult": 5.0,
+}
 
 
-def trend_direction(df) -> str:
-    """M15 trend bias from EMA9/21 relationship. 'up' / 'down' / 'flat'."""
-    last = df.iloc[-1]
-    if last["ema9"] > last["ema21"]:
-        return "up"
-    elif last["ema9"] < last["ema21"]:
-        return "down"
-    return "flat"
+@dataclass
+class Signal:
+    side: Side
+    entry: float = 0.0
+    sl: float = 0.0
+    tp1: float = 0.0
+    tp2: float = 0.0
+    confidence: float = 0.0
+    regime: str = ""
+    reasons: list = field(default_factory=list)
 
 
-def chop_filter_pass(df) -> bool:
+def _trend_votes(row) -> list:
+    """Each entry: +1 vote bullish, -1 bearish, 0 neutral, with a label."""
+    votes = []
+    votes.append((1 if row["ema9"] > row["ema21"] > row["ema50"] else
+                  -1 if row["ema9"] < row["ema21"] < row["ema50"] else 0, "ema_stack"))
+    votes.append((1 if row["close"] > row["ema200"] else -1, "ema200_bias"))
+    votes.append((1 if row["macd_hist"] > 0 else -1, "macd_hist"))
+    votes.append((1 if row["supertrend_dir"] == 1 else -1, "supertrend"))
+    votes.append((1 if row["close"] > row["psar"] else -1, "psar"))
+    votes.append((1 if row["adx14"] >= 22 else 0, "adx_strength"))  # confirms strength, no direction
+    votes.append((1 if row["structure"] in ("HH", "HL") else
+                  -1 if row["structure"] in ("LH", "LL") else 0, "structure"))
+    votes.append((1 if row["rsi14"] > 50 else -1, "rsi_bias"))
+    votes.append((1 if row["obv_slope"] > 0 else -1, "obv_slope"))
+    return votes
+
+
+def _range_votes(row) -> list:
+    votes = []
+    votes.append((1 if row["close"] <= row["bb_lower"] else
+                  -1 if row["close"] >= row["bb_upper"] else 0, "bollinger"))
+    votes.append((1 if row["rsi7"] <= 30 else -1 if row["rsi7"] >= 70 else 0, "rsi7_extreme"))
+    votes.append((1 if row["stoch_k"] <= 20 else -1 if row["stoch_k"] >= 80 else 0, "stochastic"))
+    votes.append((1 if row["williams_r"] <= -80 else -1 if row["williams_r"] >= -20 else 0, "williams_r"))
+    votes.append((1 if row["cci20"] <= -100 else -1 if row["cci20"] >= 100 else 0, "cci"))
+    votes.append((1 if row["close"] < row["vwap"] else -1, "vwap_side"))
+    votes.append((1 if row["pin_bar_bull"] else -1 if row["pin_bar_bear"] else 0, "rejection_candle"))
+    votes.append((1 if row["close"] <= row["s1"] else -1 if row["close"] >= row["r1"] else 0, "pivot_zone"))
+    return votes
+
+
+def _score(votes) -> tuple:
+    """Returns (side, confidence 0-1, reasons list) from a vote list."""
+    active = [v for v in votes if v[0] != 0]
+    if not active:
+        return "NO_TRADE", 0.0, []
+    bulls = [label for v, label in active if v == 1]
+    bears = [label for v, label in active if v == -1]
+    total = len(votes)
+
+    if len(bulls) > len(bears):
+        return "BUY", len(bulls) / total, bulls
+    elif len(bears) > len(bulls):
+        return "SELL", len(bears) / total, bears
+    return "NO_TRADE", 0.0, []
+
+
+def generate_signal(row, params: dict = None) -> Signal:
     """
-    Returns True if the market is NOT choppy (i.e. safe to trade).
-    Three checks, all must indicate directionality:
-      1. Candles are not alternating color randomly
-      2. Price is meaningfully away from VWAP (not glued to it)
-      3. EMA9/21 have real separation (not flat/tangled)
+    row: a single row (pandas Series) from the indicator-enriched DataFrame,
+         must already include an 'obv_slope' column (see strategy.add_obv_slope).
     """
-    last = df.iloc[-1]
-    is_alternating = ind.candle_color_alternation(df, lookback=6)
-    vwap_distance_pct = abs(last["close"] - last["vwap"]) / last["vwap"] * 100
-    has_vwap_distance = vwap_distance_pct > 0.3  # ~ a few dollars on gold
-    has_ema_separation = last["ema_sep_pct"] > 0.02
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    regime = "trend" if row["adx14"] >= p["adx_trend_threshold"] else "range"
 
-    return (not is_alternating) and has_vwap_distance and has_ema_separation
-
-
-def atr_volatility_ok(df, lookback: int = 20) -> bool:
-    """Skip dead markets: current ATR must be at/above its recent average."""
-    recent_atr = df["atr14"].tail(lookback)
-    if len(recent_atr) < lookback:
-        return True  # not enough history yet, don't block on this alone
-    return df["atr14"].iloc[-1] >= recent_atr.mean()
-
-
-def rejection_confirmation(df, direction: str) -> bool:
-    """
-    direction: 'buy' looks for bullish rejection (long lower wick, close upper third,
-                next candle breaks the low).
-    direction: 'sell' looks for bearish rejection (long upper wick, close lower third,
-                next candle breaks the high).
-    Requires at least 2 candles after the rejection candle to confirm the break.
-    """
-    if len(df) < 3:
-        return False
-    candle = df.iloc[-2]   # the rejection candle
-    confirm = df.iloc[-1]  # the candle that should break its level
-
-    body = abs(candle["close"] - candle["open"])
-    full_range = candle["high"] - candle["low"]
-    if full_range <= 0:
-        return False
-
-    if direction == "buy":
-        lower_wick = min(candle["open"], candle["close"]) - candle["low"]
-        close_position = (candle["close"] - candle["low"]) / full_range
-        wick_ok = body > 0 and lower_wick >= 2 * body
-        close_ok = close_position >= 0.66
-        break_ok = confirm["high"] > candle["high"]
-        return wick_ok and close_ok and break_ok
-
-    if direction == "sell":
-        upper_wick = candle["high"] - max(candle["open"], candle["close"])
-        close_position = (candle["high"] - candle["close"]) / full_range
-        wick_ok = body > 0 and upper_wick >= 2 * body
-        close_ok = close_position >= 0.66
-        break_ok = confirm["low"] < candle["low"]
-        return wick_ok and close_ok and break_ok
-
-    return False
-
-
-def rsi_agrees(df, direction: str) -> bool:
-    """RSI is a confirmation input only, never a standalone trigger."""
-    last_rsi = df["rsi7"].iloc[-1]
-    if direction == "buy":
-        return last_rsi < 65  # not already overbought / exhausted
-    if direction == "sell":
-        return last_rsi > 35  # not already oversold / exhausted
-    return False
-
-
-def evaluate_signal(m5_df, m15_df):
-    """
-    Main entry point. Runs the full confluence gate on M5 (entry) confirmed
-    by M15 (trend). Returns a dict describing the outcome — either a
-    high-probability trade signal or a structured 'no trade' reason.
-
-    Weighted scoring: fires a signal when at least 4 of the 5 gates pass,
-    instead of requiring all 5.
-    """
-    m5 = build_frame(m5_df)
-    m15 = build_frame(m15_df)
-
-    m15_trend = trend_direction(m15)
-    if m15_trend == "flat":
-        return {"signal": "NO_TRADE", "reason": "No clear M15 trend"}
-
-    direction = "buy" if m15_trend == "up" else "sell"
-
-    gates = {
-        "m15_trend_defined": m15_trend != "flat",
-        "chop_filter": chop_filter_pass(m5),
-        "atr_volatility": atr_volatility_ok(m5),
-        "rejection_confirmation": rejection_confirmation(m5, direction),
-        "rsi_agrees": rsi_agrees(m5, direction),
-    }
-
-    score = sum(1 for v in gates.values() if v)
-    MIN_SCORE = 4
-    if score < MIN_SCORE:
-        failed = [k for k, v in gates.items() if not v]
-        return {"signal": "NO_TRADE", "reason": f"Score {score}/5, failed: {', '.join(failed)}"}
-
-    last = m5.iloc[-1]
-    entry = last["close"]
-    atr_val = last["atr14"]
-
-    rejection_candle = m5.iloc[-2]
-    if direction == "buy":
-        sl = rejection_candle["low"] - 0.25 * atr_val
-        risk = entry - sl
-        tp = entry + MIN_RR * risk
+    if regime == "trend":
+        votes = _trend_votes(row)
+        side, confidence, reasons = _score(votes)
+        threshold = p["score_threshold_trend"]
     else:
-        sl = rejection_candle["high"] + 0.25 * atr_val
-        risk = sl - entry
-        tp = entry - MIN_RR * risk
+        votes = _range_votes(row)
+        side, confidence, reasons = _score(votes)
+        threshold = p["score_threshold_range"]
 
-    if risk <= 0:
-        return {"signal": "NO_TRADE", "reason": "Invalid risk calculation"}
+    if side == "NO_TRADE" or confidence < threshold:
+        return Signal(side="NO_TRADE", regime=regime, confidence=confidence)
 
-    rr = abs(tp - entry) / risk
-    if rr < MIN_RR - 0.01:
-        return {"signal": "NO_TRADE", "reason": "RR below minimum threshold"}
+    entry = row["close"]
+    atr_val = row["atr14"]
+    if side == "BUY":
+        sl = entry - p["atr_sl_mult"] * atr_val
+        tp1 = entry + p["atr_tp1_mult"] * atr_val
+        tp2 = entry + p["atr_tp2_mult"] * atr_val
+    else:
+        sl = entry + p["atr_sl_mult"] * atr_val
+        tp1 = entry - p["atr_tp1_mult"] * atr_val
+        tp2 = entry - p["atr_tp2_mult"] * atr_val
 
-    return {
-        "signal": "BUY" if direction == "buy" else "SELL",
-        "entry": round(entry, 2),
-        "sl": round(sl, 2),
-        "tp": round(tp, 2),
-        "rr": round(rr, 2),
-        "rsi7": round(last["rsi7"], 1),
-        "atr": round(atr_val, 2),
-        "m15_trend": m15_trend,
-        "gates": gates,
-        "score": f"{score}/5",
-    }
+    return Signal(
+        side=side,
+        entry=entry,
+        sl=sl,
+        tp1=tp1,
+        tp2=tp2,
+        confidence=confidence,
+        regime=regime,
+        reasons=reasons,
+    )
+
+
+def add_obv_slope(df, window: int = 5):
+    """OBV's raw value isn't meaningful on its own -- its recent slope is."""
+    df = df.copy()
+    df["obv_slope"] = df["obv"].diff(window)
+    df["obv_slope"] = df["obv_slope"].fillna(0)
+    return df

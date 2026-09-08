@@ -1,0 +1,15 @@
+{
+  "params": {
+    "adx_trend_threshold": 22,
+    "atr_sl_mult": 1.5,
+    "atr_tp1_mult": 3.0,
+    "atr_tp2_mult": 5.0,
+    "score_threshold_range": 0.8,
+    "score_threshold_trend": 0.9
+  },
+  "stats": {
+    "n_trades": 31,
+    "score": 0.075,
+    "win_rate": 0.452
+  }
+}

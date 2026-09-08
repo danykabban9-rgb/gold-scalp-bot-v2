@@ -5,7 +5,7 @@
     "atr_tp1_mult": 3.0,
     "atr_tp2_mult": 5.0,
     "score_threshold_range": 0.8,
-    "score_threshold_trend": 0.9
+    "score_threshold_trend": 0.8
   },
   "stats": {
     "n_trades": 31,

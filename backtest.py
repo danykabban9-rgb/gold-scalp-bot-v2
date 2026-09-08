@@ -92,10 +92,15 @@ def score_trades(trades: list) -> dict:
     wins = [t for t in closed if t["outcome"] in ("TP1", "TP2")]
     win_rate = len(wins) / len(closed)
 
-    # Reward more trades too, but not at the expense of win rate --
-    # a 90% win rate on 3 trades isn't as trustworthy as 65% on 80 trades.
-    sample_confidence = min(len(closed) / 50, 1.0)
-    score = win_rate * (0.5 + 0.5 * sample_confidence)
+    # Breakeven win rate at our 1:2 RR is 33%. Score is the edge ABOVE
+    # breakeven, scaled by how much we trust the sample size -- a thin
+    # edge on 20 trades isn't trustworthy, so it's penalized vs a real
+    # edge on 100+ trades. A win rate at or below breakeven scores <= 0,
+    # so the grid search will never pick a strategy with no real edge.
+    breakeven = 0.333
+    edge = win_rate - breakeven
+    sample_confidence = min(len(closed) / 80, 1.0)
+    score = edge * (0.4 + 0.6 * sample_confidence)
 
     return {
         "n_trades": len(closed),
@@ -105,9 +110,9 @@ def score_trades(trades: list) -> dict:
 
 
 def grid_search(df: pd.DataFrame) -> dict:
-    adx_options = [20, 25]
-    trend_thresh_options = [0.6, 0.7]
-    range_thresh_options = [0.6, 0.7]
+    adx_options = [22, 28]
+    trend_thresh_options = [0.8, 0.9]
+    range_thresh_options = [0.8, 0.9]
 
     best = None
     best_stats = None

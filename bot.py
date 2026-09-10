@@ -235,18 +235,16 @@ def telegram_webhook():
             else:
                 msg = format_signal_message(sig, candle_time)
             send_telegram(msg, chat_id=chat_id)
-        
-        except Exception as e:
-            print("Telegram webhook error:", e)
-            try:
-                send_telegram(f"Error handling your command: {e}", chat_id=chat_id)
-            except Exception:
-                pass
 
         return jsonify({"ok": True})
 
     except Exception as e:
         print("Telegram webhook error:", e)
+        try:
+            chat_id = str(request.get_json(force=True).get("message", {}).get("chat", {}).get("id", ""))
+            send_telegram(f"Error handling your command: {e}", chat_id=chat_id)
+        except Exception:
+            pass
         return jsonify({"ok": False}), 500
 
 

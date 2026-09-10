@@ -1,7 +1,7 @@
 import requests
 import os
 
-TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+TOKEN = 8516893389:AAFSiy73OSI-zUUOJeve3f37MkuRGP0_GVo
 WEBHOOK_URL = "https://gold-scalp-bot-v2.onrender.com/telegram"
 
 url = f"https://api.telegram.org/bot{TOKEN}/setWebhook"

@@ -150,6 +150,26 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/setup", methods=["GET"])
+def setup_webhook_manual():
+    """Manual webhook setup - visit this URL in browser to set webhook."""
+    WEBHOOK_URL = "https://gold-scalp-bot-v2.onrender.com/telegram"
+    
+    if not TELEGRAM_TOKEN:
+        return jsonify({"error": "TELEGRAM_TOKEN not set"}), 400
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook"
+    try:
+        response = requests.post(url, json={"url": WEBHOOK_URL}, timeout=10)
+        result = response.json()
+        return jsonify({
+            "webhook_url": WEBHOOK_URL,
+            "response": result
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/signal", methods=["GET"])
 def manual_signal_endpoint():
     """Manual check—always replies, even on NO TRADE, since it was asked for directly."""

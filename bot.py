@@ -1,19 +1,11 @@
 """
 bot.py
+
 Flask app that:
 - Responds to Telegram commands /start and /signal (manual check)
 - Exposes /scan for an external free cron-pinger (cron-job.org) to hit every
-  few minutes, so the bot actually scans in the background on Render's free
-  tier (which has no persistent worker process)
-- Sends a Telegram push notification with entry/SL/TP1/TP2 ONLY when a real
-  signal fires -- silent otherwise, no spam
-- Uses M15 as the primary decision frame (regime + signal), with a lightweight
-  M5 EMA-direction check as confluence before alerting
-
-Env vars required on Render:
-  TELEGRAM_TOKEN   - from BotFather
-  TWELVE_DATA_KEY  - from Twelve Data
-  CHAT_ID          - your personal Telegram chat id
+few minutes, so the bot actually scans in the background on Render's free
+tier (which has no persistent worker process)
 """
 
 import os
@@ -36,6 +28,26 @@ SYMBOL = "XAU/USD"
 
 STATE_PATH = os.path.join(os.path.dirname(__file__), "last_alert.json")
 PARAMS_PATH = os.path.join(os.path.dirname(__file__), "best_params.json")
+
+
+def setup_webhook():
+    """Auto-setup webhook on startup."""
+    WEBHOOK_URL = "https://gold-scalp-bot-v2.onrender.com/telegram"
+    
+    if not TELEGRAM_TOKEN:
+        print("⚠️  TELEGRAM_TOKEN not set, skipping webhook setup")
+        return
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook"
+    try:
+        response = requests.post(url, json={"url": WEBHOOK_URL}, timeout=10)
+        result = response.json()
+        if result.get("ok"):
+            print(f"✅ Webhook set to {WEBHOOK_URL}")
+        else:
+            print(f"❌ Webhook setup failed: {result}")
+    except Exception as e:
+        print(f"❌ Webhook setup error: {e}")
 
 
 def load_params() -> dict:
@@ -89,7 +101,7 @@ def check_m5_confluence(side: str) -> bool:
             return last["ema9"] < last["ema21"]
     except Exception as e:
         print("M5 confluence check failed, allowing signal through:", e)
-        return True  # don't block an alert just because a secondary check failed
+        return True  # don't block a alert just because a secondary check failed
     return True
 
 
@@ -118,21 +130,36 @@ def format_signal_message(sig, candle_time: str) -> str:
     )
 
 
-@app.route("/", methods=["GET"])
-def health():
-    return jsonify({"status": "ok"})
-
-
-@app.route("/signal", methods=["GET"])
 def manual_signal():
-    """Manual check -- always replies, even on NO_TRADE, since it was asked for directly."""
+    """Manual check—always replies, even on NO TRADE, since it was asked for directly."""
     try:
         sig, candle_time = build_signal()
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
     if sig.side == "NO_TRADE":
-        msg = f"NO_TRADE right now (regime: {sig.regime}, confidence: {sig.confidence:.0%})"
+        msg = f"NO TRADE right now (regime: {sig.regime}, confidence: {sig.confidence:.0%})"
+    else:
+        msg = format_signal_message(sig, candle_time)
+
+    return jsonify({"message": msg})
+
+
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
+
+
+@app.route("/signal", methods=["GET"])
+def manual_signal_endpoint():
+    """Manual check—always replies, even on NO TRADE, since it was asked for directly."""
+    try:
+        sig, candle_time = build_signal()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    if sig.side == "NO_TRADE":
+        msg = f"NO TRADE right now (regime: {sig.regime}, confidence: {sig.confidence:.0%})"
     else:
         msg = format_signal_message(sig, candle_time)
 
@@ -179,6 +206,7 @@ def run_backtest_endpoint():
         df = get_history(SYMBOL, "15min", TWELVE_DATA_KEY, refresh=True)
         if len(df) < 250:
             return jsonify({"error": f"Only {len(df)} candles available, need at least 250"}), 400
+
         result = run_backtest(df)
         return jsonify(result)
     except Exception as e:
@@ -203,21 +231,26 @@ def telegram_webhook():
         elif text.startswith("/signal"):
             sig, candle_time = build_signal()
             if sig.side == "NO_TRADE":
-                msg = f"NO_TRADE right now (regime: {sig.regime}, confidence: {sig.confidence:.0%})"
+                msg = f"NO TRADE right now (regime: {sig.regime}, confidence: {sig.confidence:.0%})"
             else:
                 msg = format_signal_message(sig, candle_time)
             send_telegram(msg, chat_id=chat_id)
+        
+        except Exception as e:
+            print("Telegram webhook error:", e)
+            try:
+                send_telegram(f"Error handling your command: {e}", chat_id=chat_id)
+            except Exception:
+                pass
+
+        return jsonify({"ok": True})
 
     except Exception as e:
         print("Telegram webhook error:", e)
-        try:
-            send_telegram(f"Error handling your command: {e}", chat_id=chat_id)
-        except Exception:
-            pass
-
-    return jsonify({"ok": True})
+        return jsonify({"ok": False}), 500
 
 
 if __name__ == "__main__":
+    setup_webhook()  # Auto-setup webhook on startup
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

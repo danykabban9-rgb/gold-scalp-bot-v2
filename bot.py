@@ -14,42 +14,28 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 
 def send_telegram_message(chat_id, text):
-    """Send message via Telegram Bot API"""
     try:
         url = f"{TELEGRAM_API}/sendMessage"
         payload = {"chat_id": chat_id, "text": text}
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"Send message error: {e}")
+        print(f"Send error: {e}")
 
 
 def get_signal():
-    """Fetch latest candles, compute indicators, generate signal"""
     try:
         df = get_latest("XAU/USD", "5min", TWELVE_DATA_KEY, bars=300)
         df = compute_all_indicators(df)
         df = add_obv_slope(df, window=5)
-        
         latest_row = df.iloc[-1]
         signal = generate_signal(latest_row)
         
         if signal.side == "NO_TRADE":
-            msg = "NO TRADE\n"
-            msg += f"Regime: {signal.regime}\n"
-            msg += f"Confidence: {signal.confidence:.2%}"
+            return f"NO TRADE\nRegime: {signal.regime}\nConfidence: {signal.confidence:.1%}"
         else:
-            emoji = "BUY" if signal.side == "BUY" else "SELL"
-            msg = emoji + "\n"
-            msg += f"Entry: {signal.entry:.2f}\n"
-            msg += f"SL: {signal.sl:.2f}\n"
-            msg += f"TP1: {signal.tp1:.2f}\n"
-            msg += f"TP2: {signal.tp2:.2f}\n"
-            msg += f"Confidence: {signal.confidence:.2%}\n"
-            msg += f"Regime: {signal.regime}\n"
-            msg += f"Reasons: {', '.join(signal.reasons)}"
-        
-        return msg
-    
+            side_str = "BUY" if signal.side == "BUY" else "SELL"
+            msg = f"{side_str}\nEntry: {signal.entry:.2f}\nSL: {signal.sl:.2f}\nTP1: {signal.tp1:.2f}\nTP2: {signal.tp2:.2f}\nConfidence: {signal.confidence:.1%}\nRegime: {signal.regime}"
+            return msg
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -69,3 +55,19 @@ def telegram_webhook():
         message = data.get("message", {})
         text = message.get("text", "")
         chat_id = str(message.get("chat", {}).get("id", ""))
+        
+        if text == "/start":
+            send_telegram_message(chat_id, "Bot running")
+        elif text == "/signal":
+            signal = get_signal()
+            send_telegram_message(chat_id, signal)
+        
+        return jsonify({"ok": True})
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"ok": True})
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)

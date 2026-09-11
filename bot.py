@@ -1,12 +1,15 @@
 import os
 import requests
 from flask import Flask, request, jsonify
-from strategy import get_signal
+from data_feed import get_latest
+from indicators import compute_all_indicators
+from strategy import generate_signal, add_obv_slope
 
 app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
+TWELVE_DATA_KEY = os.environ.get("TWELVE_DATA_KEY", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 def send_telegram_message(chat_id, text):
@@ -18,35 +21,37 @@ def send_telegram_message(chat_id, text):
     except Exception as e:
         print(f"Send message error: {e}")
 
-@app.route("/", methods=["GET"])
-def health():
-    return jsonify({"status": "ok"})
-
-@app.route("/telegram", methods=["POST"])
-def telegram_webhook():
+def get_signal():
+    """Fetch latest candles, compute indicators, generate signal"""
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"ok": True})
+        # Fetch latest 300 candles
+        df = get_latest("XAU/USD", "5min", TWELVE_DATA_KEY, bars=300)
         
-        message = data.get("message", {})
-        text = message.get("text", "")
-        chat_id = str(message.get("chat", {}).get("id", ""))
+        # Compute all indicators
+        df = compute_all_indicators(df)
         
-        if text == "/start":
-            send_telegram_message(chat_id, "Gold scalping bot v2 running ✓")
+        # Add OBV slope
+        df = add_obv_slope(df, window=5)
         
-        elif text == "/signal":
-            signal = get_signal()
-            send_telegram_message(chat_id, signal)
+        # Get latest row and generate signal
+        latest_row = df.iloc[-1]
+        signal = generate_signal(latest_row)
         
-        return jsonify({"ok": True})
+        # Format message
+        if signal.side == "NO_TRADE":
+            msg = f"🔍 NO TRADE\nRegime: {signal.regime}\nConfidence: {signal.confidence:.2%}"
+        else:
+            msg = (
+                f"{'🟢 BUY' if signal.side == 'BUY' else '🔴 SELL'}\n"
+                f"Entry: {signal.entry:.2f}\n"
+                f"SL: {signal.sl:.2f}\n"
+                f"TP1: {signal.tp1:.2f}\n"
+                f"TP2: {signal.tp2:.2f}\n"
+                f"Confidence: {signal.confidence:.2%}\n"
+                f"Regime: {signal.regime}\n"
+                f"Reasons: {', '.join(signal.reasons)}"
+            )
+        return msg
     
     except Exception as e:
-        print(f"Webhook error: {e}")
-        send_telegram_message(chat_id, f"Error: {str(e)}")
-        return jsonify({"ok": True})
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+        return f"❌ Er

@@ -41,13 +41,27 @@ def get_signal():
         signal = generate_signal(latest_row)
         
         if signal.side == "NO_TRADE":
-            return f"NO TRADE\nRegime: {signal.regime}\nConfidence: {signal.confidence:.1%}"
+            msg = "NO TRADE"
         else:
-            side_str = "BUY" if signal.side == "BUY" else "SELL"
-            msg = f"{side_str}\nEntry: {signal.entry:.2f}\nSL: {signal.sl:.2f}\nTP1: {signal.tp1:.2f}\nTP2: {signal.tp2:.2f}\nConfidence: {signal.confidence:.1%}\nRegime: {signal.regime}"
-            return msg
+            entry = signal.entry
+            sl = signal.sl
+            tp1 = signal.tp1
+            tp2 = signal.tp2
+            conf = signal.confidence
+            regime = signal.regime
+            side = signal.side
+            
+            msg = side + "\n"
+            msg = msg + "Entry: " + str(entry) + "\n"
+            msg = msg + "SL: " + str(sl) + "\n"
+            msg = msg + "TP1: " + str(tp1) + "\n"
+            msg = msg + "TP2: " + str(tp2) + "\n"
+            msg = msg + "Confidence: " + str(conf) + "\n"
+            msg = msg + "Regime: " + regime
+        
+        return msg
     except Exception as e:
-        return f"Error: {str(e)}"
+        return "Error: " + str(e)
 
 
 @app.route("/", methods=["GET"])

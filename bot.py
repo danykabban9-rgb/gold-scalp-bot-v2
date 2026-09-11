@@ -13,6 +13,16 @@ TWELVE_DATA_KEY = os.environ.get("TWELVE_DATA_KEY", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 
+def setup_webhook():
+    try:
+        webhook_url = "https://gold-scalp-bot-v2.onrender.com/telegram"
+        url = f"{TELEGRAM_API}/setWebhook"
+        requests.post(url, json={"url": webhook_url}, timeout=10)
+        print(f"Webhook set to {webhook_url}")
+    except Exception as e:
+        print(f"Webhook error: {e}")
+
+
 def send_telegram_message(chat_id, text):
     try:
         url = f"{TELEGRAM_API}/sendMessage"
@@ -66,6 +76,9 @@ def telegram_webhook():
     except Exception as e:
         print(f"Error: {e}")
         return jsonify({"ok": True})
+
+
+setup_webhook()
 
 
 if __name__ == "__main__":
